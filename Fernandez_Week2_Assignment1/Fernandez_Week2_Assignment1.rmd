@@ -1,0 +1,144 @@
+---
+output:
+  word_document: default
+  html_document: default
+---
+# Simple Linear Regression and Correlation
+## Miguel Fernandez
+### BAN-502
+
+
+```{r setup, message = FALSE}
+# Import libraries
+library(tidyverse)
+library(knitr)
+library(GGally)
+library(lmtest)
+
+# Set global theme
+theme_set(theme_bw())
+```
+
+#### Task 1
+```{r}
+# Read in data set
+air = airquality
+```
+
+The data set `air` contains daily air quality measures in New York in 1973. Data was collected from May 1 to September 30. In the five month period, 153 observations were made across six variables. These include `Ozone`, `Solar.R`, `Wind`, `Temp`, `Month` and `Day`. The summary below reveals 37 missing values from the `Ozone` variable and 7 missing values from the `Solar.R` variable. For the purposes of this exercise, I believe the response variable to be `Ozone` This variable is a measure of the mean ozone in parts per billion.
+
+```{r}
+# Use str() to get number of rows and columns
+# str(air)
+# Generate summary of the data frame
+kable(summary(air))
+```
+
+#### Task 2
+```{r}
+# Remove null values from data set
+air2 <- air %>%
+  drop_na()
+
+# Use str() to get number of rows and columns
+# str(air2)
+```
+
+After removing the missing values, there are now 111 observations in the data set as well as the same six variables.
+
+#### Task 3
+```{r, message=F, fig.width=7, fig.height=6}
+# Create matrix of plots
+ggpairs(air2)
+```
+
+```{r, fig.width=5, fig.height=5}
+ggcorr(air2, label = "TRUE")
+```
+
+In the correlation matrix, `Temp` is the most strongly correlated to `Ozone` while `Wind` is the least strongly correlated.
+
+#### Task 4
+```{r Scatterplot1}
+# Plot Temp vs Ozone
+ggplot(air2, aes(x = Temp, y = Ozone)) +
+  geom_point(shape = 21,
+             size = 2,
+             fill = '#eb8d13')
+```
+
+The plot `Temp` versus `Ozone` visualizes the positive correlation from the matrix plot above. As `Temp` increases, so too, does `Ozone`. A non-linear method might describe the data more accurately but further analysis is needed to confirm that. There are also outliers present in the data set for `Ozone`. For example, the point representing 150 parts per billion is unusually high. This could be an accurate recording or another possible explanation is that an extra zero was input when entering the data. The reading might have been 15, which would be closer to other recordings given the temperature. 
+
+#### Task 5
+```{r}
+# Create linear model
+model1 <- lm(Ozone ~ Temp, air2)
+# Generate model statistics
+summary(model1)
+# Generate confidence interval
+confint(model1)
+```
+
+The model statistics generated above provide useful measures for interpreting the strength and validity of the model. `Temp` has a coefficient of 2.44, meaning that for an increase in one degree Fahrenheit, the mean Ozone in ppb increases by 2.44. The p-value for `Temp` is near-zero, indicating that it is a significant predictor in the model. A confidence interval for `Temp` identifies a range that the true slope likely falls. We are 95 percent confident that the slope will fall between 1.96 and 2.91.
+
+#### Task 6
+```{r, message = FALSE}
+# Plot Temp vs Ozone with regression line
+ggplot(air2, aes(x = Temp, y = Ozone)) +
+  geom_point(shape = 21,
+             size = 2,
+             fill = '#eb8d13') +
+  geom_smooth(method = 'lm',
+              se = FALSE,
+              color = 'gray20',
+              linetype = 'dashed')
+```
+
+#### Task 7
+```{r}
+# Generate prediction using model
+test.data <- data.frame(Temp = 80)
+kable(predict(model1, newdata = test.data, interval = "predict"))
+```
+
+The model predicted 47.48 ppb for `Ozone` when `Temp` is 80&deg;F. However, the prediction interval is large and spans a range of nearly 100 parts per billion. 
+
+#### Task 8
+**An appropriate model must meet the following criteria:**  
+1. _The predictor and response variable must have a linear relationship._  
+By examining the plot from Task 4 and Task 6, we can confirm that this criteria has been met.  
+  
+2. _Residuals are independent_  
+We can use the Durbin-Watson statistic to test for independence.  
+```{r}
+dwtest(model1)
+```
+
+The test returns a p-value greater than 0.05 which indicates that the residuals are independent.  
+
+3. _Residuals exhibit constant variance_  
+```{r}
+# Add residuals from model to data frame
+air2 <- air2 %>%
+  mutate(resid1 = model1$residuals)
+
+# Plot residuals to confirm constant variance
+ggplot(air2, aes(x = Temp, y = resid1)) +
+  geom_point(size = 2, color = '#eb8d13')
+```
+
+Overall, the plot confirms constant variance. There is no distinct cone or funnel shape in the plot. They are a few outliers present in the data.  
+
+4. _Residuals are normally distributed._  
+```{r}
+# Create histogram to confirm normality
+ggplot(air2, aes(x = resid1)) +
+  geom_histogram(bins = 50,
+                 color = 'white',
+                 fill = '#eb8d13')
+```
+
+The residuals appear to be somewhat normally distributed. There are outliers present causing a positive skew in the data set.
+
+#### Task 9
+The model that was constructed above could be used to predict measures of ozone in the atmosphere and used to issue air quality warnings. The model has an R-squared value of 0.49 meaning that approximately 50 percent of ozone measures can be explained by temperature. While this is a somewhat strong model, adding more predictors could help increase the R-squared value giving analysts and meteorologists more confidence in the model. If air quality warnings attempt to restrict movement and activities, a stronger model is needed. This model was also built using data from New York City only. According to the [EPA](https://www.epa.gov/ground-level-ozone-pollution/ground-level-ozone-basics), ozone is formed when sunlight reacts to particles of nitrogen oxides (NOx) emitted by cars, factories and other sources. New York City is a densely populated island and a model that uses data from New York City may not be appropriate to predict measures of ozone in a smaller city.
