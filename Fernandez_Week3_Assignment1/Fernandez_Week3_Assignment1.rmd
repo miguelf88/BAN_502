@@ -1,0 +1,160 @@
+---
+output:
+  word_document: default
+  html_document: default
+---
+# Model Validation
+## Miguel Fernandez
+### BAN-502
+
+```{r, message=FALSE}
+# Import libraries
+library(tidyverse)
+library(MASS)
+library(caret)
+```
+
+```{r, message=FALSE}
+# Read in data
+bike <- read_csv("hour.csv")
+
+# Recode variables and levels
+bike <- bike %>%
+  mutate(season = as_factor(as.character(season))) %>%
+  mutate(season = fct_recode(season,
+                             "Spring" = "1",
+                             "Summer" = "2",
+                             "Fall" = "3",
+                             "Winter" = "4")) %>%
+  mutate(yr = as_factor(as.character(yr))) %>%
+  mutate(mnth = as_factor(as.character(mnth))) %>%
+  mutate(hr = as_factor(as.character(hr))) %>%
+  mutate(holiday = as_factor(as.character(holiday))) %>%
+  mutate(holiday = fct_recode(holiday,
+                              "NotHoliday" = "0",
+                              "Holiday" = "1")) %>%
+  mutate(workingday = as_factor(as.character(workingday))) %>%
+  mutate(workingday = fct_recode(workingday,
+                                 "NotWorkingDay" = "0",
+                                 "WorkingDay" = "1")) %>%
+  mutate(weathersit = as_factor(as.character(weathersit))) %>%
+  mutate(weathersit = fct_recode(weathersit,
+                                 "NoPrecip" = "1",
+                                 "Misty" = "2",
+                                 "LightPrecip" = "3",
+                                 "HeavyPrecip" = "4")) %>%
+  mutate(weekday = as_factor(as.character(weekday))) %>%
+  mutate(weekday = fct_recode(weekday,
+                              "Sunday" = "0",
+                              "Monday" = "1",
+                              "Tuesday" = "2",
+                              "Wednesday" = "3",
+                              "Thursday" = "4",
+                              "Friday" = "5",
+                              "Saturday" = "6"))
+```
+
+#### Task 1
+```{r}
+# Set random seed
+set.seed(1234)
+# Split data for training and testing
+train.rows <- createDataPartition(y=bike$count,
+                                  p=0.7,
+                                  list = FALSE)
+train <- slice(bike, train.rows)
+test <- slice(bike, -train.rows)
+```
+
+#### Task 2
+The function `createDataPartition` has separated the data for modeling. There are 12,167 observations in the `train` data set and 5,212 observations in the `test` data set.
+
+#### Task 3
+```{r}
+# Construct linear model
+mod1 = lm(count ~ season + mnth + hr + holiday + weekday +
+          temp + weathersit,  train)
+summary(mod1)
+```
+
+We can see that the coefficient for `seasonWinter` is the strongest of all the seasons. This seems counterintuitive as one would expect summer to have more of an impact on the model. Also, looking at the month variable there are surprising results. The summer months all have negative coefficients. This is likely caused by collinearity as season is a predictor of month. Bike riding and commuting patterns overall tend to be seasonal and removing month might improve the model. We can also see that time of day, particularly the morning and evening commute times have the largest impact on the model which is expected. The model has a strong R-squared value of 0.63. However, removing features that show signs of collinearity would improve the R-squared value.
+
+#### Task 4
+```{r}
+# Examine training predictions
+train.pred <- predict(mod1, newdata = train)
+head(train.pred)
+
+# Generate summaries
+summary(train.pred)
+summary(train$count)
+
+# Create histogram of predictions and actual counts
+x1 <- as.data.frame(train.pred)
+ggplot(x1, aes(train.pred)) +
+  geom_histogram(binwidth = 20,
+                 fill = "#CE5C00",
+                 color = "white") +
+  ggtitle("Prediction of Count Using Training Data") +
+  xlab("Number of Bike Rides per Day") +
+  ylab("Count") +
+  theme_bw()
+```
+
+Looking at the summary of the model's prediction for `count`, we can see that there are negative values. This an unexpected result as there cannot be negative bike ridership. The model has a mean prediction of 189.33 rides per day and a maximum value of 584.44. The above summary of the acutal bike rideship data from the training data set gives us a sense of how the model performed. We see that the lowest daily count was 1 while the model predicted negative values. However, the mean values are very similar between the predictions and the actual counts. The maximum value in the actual data is nearly 1,000 which is a large gap between the two models. This is likely the result of some significant outliers in the training data set. The histogram reveals a bimodal distribution in the predictions with peaks around 75 and 300 rides per day. We also see a small percentage of predictions with negative values. 
+
+#### Task 5
+```{r}
+# Examine testing predictions
+test.pred <- predict(mod1, newdata = test)
+head(test.pred)
+
+# Generate summaries
+summary(test.pred)
+summary(test$count)
+
+# Create histogram of predictions and actual counts
+x2 <- as.data.frame(test.pred)
+ggplot(x2, aes(test.pred)) +
+  geom_histogram(binwidth = 20,
+                 fill = "#4E9A06",
+                 color = "white") +
+  ggtitle("Prediction of Count Using Testing Data") +
+  xlab("Number of Bike Rides per Day") +
+  ylab("Count") +
+  theme_bw()
+```
+
+The summaries and distributions between the training data set and testing data set are almost identical. While the results do have negative values of bike rides, the model did perform well on the unseen data and predicted values similar to those of the training data.
+
+#### Task 6
+```{r}
+# Calculate R-squared value
+sse <- sum((test$count - test.pred)^2)
+sst <- sum((test$count - mean(test$count))^2)
+print(1 - sse/sst)
+```
+
+The model has a strong R-squared value of 0.63. While the model did predict negative values, they only represent a small subset of the data. While 63 percent of the data can be explained by the model, it is likely that those negative values make up a portion of the 37 percent that is not explained by the model.
+
+#### Task 7
+The k-fold cross-validation technique and the train test split method are two ways to validate a data model. The latter splits the data set into two sections, a training portion and a testing portion. The modeler is able to specify what percentage of the data is used for training and fine tuning of the model. The testing set remains unseen by the model until final validation. This is also a disadvantage of the train test split approach. Data is intentionally withheld from the model while training and any patterns that exist in that data will be missed in training. This is where the k-folds cross-validation method shines. Using this approach, the modeler specifies how many segments to split the data into. This is the k in k-folds and is often 5 or 10 folds. The model will then be trained on k - 1 segments of the data while the last segment is saved for testing. This is repeated until all of the segments have been tested. This approach requires more processing time but yields more accurate results.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
