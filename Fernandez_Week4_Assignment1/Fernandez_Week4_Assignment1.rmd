@@ -1,0 +1,103 @@
+---
+output:
+  word_document: default
+  html_document: default
+---
+# Missing Data
+### Miguel Fernandez
+### BAN-502
+
+```{r, message=FALSE}
+# Import libraries
+library(tidyverse)
+library(VIM)
+library(mice)
+```
+
+```{r, message=FALSE}
+# Read in data
+grades <- read_csv("class-grades.csv")
+```
+
+#### Task 1
+```{r}
+# Summary of data
+summary(grades)
+``` 
+
+The summary above reveals that of the 99 observations in the data set, we are missing 1 value in `Tutorial`, 3 values in `Midterm`, 3 values in `TakeHome` and 4 values in `Final`.
+
+#### Task 2
+```{r}
+# Visualize missingness
+vim_plot = aggr(grades, numbers = TRUE,
+                prop = c(TRUE, FALSE),cex.axis=.7)
+```
+
+The aggregation plot above highlights missing data in the data set `grades`. We can see that there is one case where an observation is missing two variables, `MidTerm` and `TakeHome`. Apart from that one case, there are only a few instances of an observation missing a single variable.
+
+#### Task 3
+```{r}
+# Row-wise deletion
+drop.row <- grades %>%
+  drop_na()
+nrow(drop.row)
+```
+
+After performing row-wise deletion of NA values, we have a data set with 89 rows.
+
+#### Task 4
+```{r}
+# Column-wise deletion
+drop.col <- grades[ , colSums(is.na(grades)) == 0]
+length(drop.col)
+```
+
+Using the column-wise approach to removing NA values, the data set is left with 2 columns of data, `Prefix` and `Assignment`.
+
+#### Task 5
+The row-wise approach is the most appropriate method for this data set. This is because only 10 rows of data are removed while the column-wise method removes 4 variables of data, leaving very little for analysis. If the columns that were removed contained more than 70 or 80 percent missing values, then removing those columns may be the best approach. However, in this case, there were only a few missing values from those columns so there is no need to remove the entire column. 
+
+#### Task 6
+```{r}
+# Perform imputation on data set
+grades_imp = mice(grades, m=1, method = "pmm", seed = 12345)
+summary(grades_imp)
+# Create plot of imputed data
+densityplot(grades_imp)
+# Merge imputed data with original data set
+grades_complete = complete(grades_imp)
+summary(grades_complete)
+```
+
+#### Task 7
+Missing data can have a tremendous impact on data analysis and modeling. Therefore, knowing how to handle missing values is extemely important. For example, missing data can cause misleading results. If values are not present when the model is trained, the model could miss out on detecting additional patterns. When new data is presented to the model, crucial insights will be missed. Also, several model algorithms will not function properly when fed missing data.  
+Imputation is the process whereby missing values are predicted to fill in the data set. There are several methods that can be used including calculating the mean, median, or mode, as well as using regression techniques. However, this may not always be the best approach. For example, using mean imputation would calculate one value to be used to replace all missing values regardless of the relationship between this variable and all other variables. Or there are significant outliers present in the variable, those values will skew the imputed mean. If the data set you are working with is relatively small, using the regression approach may not be suitable because there may not be enough data for the model to make an informed decision.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
