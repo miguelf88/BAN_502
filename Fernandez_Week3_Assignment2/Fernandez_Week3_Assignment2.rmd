@@ -1,0 +1,250 @@
+---
+output:
+  word_document: default
+  html_document: default
+---
+# Classification with Logistic Regression
+### Miguel Fernandez
+### BAN-502
+
+```{r, message=FALSE}
+# Import libraries
+library(tidyverse)
+library(MASS)
+library(caret)
+library(ROCR)
+library(GGally)
+library(gridExtra)
+
+# Set global theme
+theme_set(theme_bw())
+
+# Read in data
+parole <- read_csv("parole.csv")
+
+# Recode variables and levels
+parole <- parole %>%
+  mutate(male = as_factor(as.character(male))) %>%
+  mutate(male = fct_recode(male,"male" = "1", "female" = "0")) %>%
+  mutate(race = as_factor(as.character(race))) %>%
+  mutate(race = fct_recode(race,"white" = "1", "not.white" = "2")) %>%
+  mutate(state = as_factor(as.character(state))) %>%
+  mutate(state = fct_recode(state,"ky" = "2",
+                            "la" = "3",
+                            "va" = "4",
+                            "other" = "1")) %>%
+  mutate(multiple.offenses = as_factor(as.character(multiple.offenses))) %>%
+  mutate(multiple.offenses = fct_recode(multiple.offenses,"yes" = "1",
+                                        "no" = "0")) %>%
+  mutate(crime = as_factor(as.character(crime))) %>%
+  mutate(crime = fct_recode(crime,"larceny" = "2",
+                            "drug" = "3",
+                            "driving" = "4",
+                            "other" = "1")) %>%
+  mutate(violator = as_factor(as.character(violator))) %>%
+  mutate(violator = fct_recode(violator,"yes" = "1", "no" = "0"))
+```
+
+#### Task 1
+```{r}
+# Set # random seed
+set.seed(12345)
+# Split data for training and testing
+train.rows <- createDataPartition(y=parole$violator,
+                                  p=0.7,
+                                  list = FALSE)
+train <- slice(parole, train.rows)
+test <- slice(parole, -train.rows)
+```
+
+#### Task 2
+```{r, fig.width=8.5}
+# Check distribution of numeric variables
+par(mfrow = c(1,3))
+
+hist(train$age, ylab="Count", xlab= "Age",
+        main = NULL, col="#007D8A", ylim = c(0, 100))
+hist(train$time.served, ylab="Count", xlab= "Time Served",
+        main = NULL, col="#F29E03", ylim = c(0, 100))
+hist(train$max.sentence, ylab="Count", xlab= "Max Sentence",
+        main = NULL, col="#F85155", ylim = c(0, 250), xlim = c(0,20))
+```
+
+The histograms above reveal skewed distributions across the three numeric variables. The `train` data set contains younger parolees, mostly between 20 and 45 years old. There are very few observations greater than 60 years old. Time Served and Max Sentence are negatively skewed with a majority of observations towards the maximum values in the data set. Let's see how the variables are distributed across the response variable, violator.
+
+```{r, fig.width=8.5}
+# Check distribution of numeric variables against violator
+par(mfrow = c(1,3))
+
+boxplot(age~violator, ylab="Age", xlab= "Violator",
+        col="#007D8A",data = train)
+boxplot(time.served~violator, ylab="Time Served", xlab= "Violator",
+        col="#F29E03",data = train)
+boxplot(max.sentence~violator, ylab="Max Sentence", xlab= "Violator",
+        col="#F85155",data = train)
+```
+
+The boxplots above uncover interesting patterns. Age appears signifcant as older parolees tend to violate parole. Those who served more time appear to violate parole less. Perhaps they left the system reformed? And those whose maximum sentences were largest, violated parole less. 
+
+```{r, fig.width=8.5, fig.height=6}
+# Create barplots for factored variables
+p1 <- ggplot(parole, aes(x = male, fill = violator)) +
+  geom_bar(position = "fill") +
+  ylab("Percentage") +
+  xlab("Gender")
+p2 <- ggplot(parole, aes(x = race, fill = violator)) +
+  geom_bar(position = "fill") +
+  ylab("Percentage") +
+  xlab("Race")
+p3 <- ggplot(parole, aes(x = state, fill = violator)) +
+  geom_bar(position = "fill") +
+  ylab("Percentage") +
+  xlab("State")
+p4 <- ggplot(parole, aes(x = multiple.offenses, fill = violator)) +
+  geom_bar(position = "fill") +
+  ylab("Percentage") +
+  xlab("Multiple Offenses")
+p5 <- ggplot(parole, aes(x = crime, fill = violator)) +
+  geom_bar(position = "fill") +
+  ylab("Percentage") +
+  xlab("Crime")
+
+grid.arrange(p1, p2, p3, p4, p5, ncol = 2)
+```
+
+The barplots above reveal that a significant portion of observations have not committed parole violations. However, we can see some patterns that may help a model determine whether or not a person will violate parole. For example, Louisana contains the largest number of violators. The plot reveals that both genders are equally as likely to violate parole so by itself, `male` may not be a strong predictor of parole violation. Somewhat intuitively, we can see that those convicted of multiple offenses are more likely to violate parole and those with driving crimes, which can be less offensive, are less likely to violate parole. 
+
+#### Task 3
+```{r}
+# Construct model with state and violator
+mod1 <- glm(violator ~ state, train, family = "binomial")
+summary(mod1)
+```
+
+The summary of the logistic regression model for violator against state shows that the states of Kentucky and Virginia have negative coefficients while Louisana has a positive coefficient. The levels for Louisana and Virgina are very significant while the p-value for Kentucky is quite large. The model above has an AIC value of 283.18. Further analysis and models will need to be completed to determine is an AIC of 283.13 is a strong model or not. 
+
+#### Task 4
+```{r}
+# Build model with all variables
+allmod = glm(violator ~., train, family = "binomial") 
+summary(allmod) 
+```
+
+The summary of a logistic regression model using all variables produces an AIC of 268.09 which is an improvement on the first model above using only state as a predictor. Examaning the model coefficients, we can see that multiple offenses appears to be significant as well as race. Interestingly, the level for Virginia appears to be significant. We will perform a backwards stepwise feature selection to determine the model combination of variables for the model.
+
+```{r}
+# backward stepwise approach
+backmod = stepAIC(allmod, direction = "backward", trace = TRUE) 
+summary(backmod)
+```
+
+The backwards stepwise approach selected a combination of variables that produced the best AIC score. We can see that the model now has an AIC value of 258.98 which is ten points lowers than the full model. This model uses race, state and multiple offenses to predict whether or not a person will violate the terms of their parole. The model coefficients are supported by the graphs above. Multiple offenses appeared to be significant in the graph and now the summary confirms this. The same can be applied to state and race. 
+
+#### Task 5
+```{r}
+# Create model from backwards stepwise
+mod2 <- glm(violator ~ race + state + multiple.offenses,
+            train, family = "binomial") 
+summary(mod2) 
+```
+
+This is the same model that was produced using the backwards stepwise approach.
+
+#### Task 6
+```{r}
+# Make first prediction
+newdata = data.frame(race = "white", state = "la", multiple.offenses = "yes")
+predict(mod2, newdata, type = "response")
+```
+
+According to the model, a person from Louisana who is white and has committed multiple offenses has a 33.8 percent chance of violating their parole. Let's make a second prediction.
+
+```{r}
+newdata1 = data.frame(race = "not.white", state = "ky", multiple.offenses = "no")
+predict(mod2, newdata1, type = "response")
+```
+
+The second prediction is a non-white person from Kentucky who has not committed multiple offenses and they have a 20.7 percent chance of violating parole, according to the model.
+
+#### Task 7
+```{r, fig.height=5, fig.width=8}
+# Develop predictions on training data set
+predictions = predict(mod2, type="response")
+head(predictions)
+
+# Create ROCR object
+ROCRpred = prediction(predictions, train$violator) 
+
+# Create ROC plot
+ROCRperf = performance(ROCRpred, "tpr", "fpr")
+plot(ROCRperf, colorize=TRUE, print.cutoffs.at=seq(0,1,by=0.1), text.adj=c(-0.2,1.7))
+```
+
+Based on the ROC plot above, it appears that the cutoff value should be around 0.2 to best balance sensitivity and specificity.
+
+#### Task 8
+```{r}
+# Calculate sensitivity, specificity and cutoff value
+opt.cut = function(perf, pred){
+    cut.ind = mapply(FUN=function(x, y, p){
+        d = (x - 0)^2 + (y-1)^2
+        ind = which(d == min(d))
+        c(sensitivity = y[[ind]], specificity = 1-x[[ind]], 
+            cutoff = p[[ind]])
+    }, perf@x.values, perf@y.values, pred@cutoffs)
+}
+print(opt.cut(ROCRperf, ROCRpred))
+```
+
+```{r}
+# Create confusion matrix
+t1 = table(train$violator,predictions > 0.2069629)
+t1
+```
+
+```{r}
+# Calculate accuracy
+(t1[1,1]+t1[2,2])/nrow(train)
+```
+
+The code above identifies the optimal cutoff value of 0.207 which is incredibly close to the value estimated in Task 7. Using that as a cutoff value, we see a sensitivity of 0.727 meaning that the model correctly identified nearly 73 percent of those who violated their parole. The model has a specificity of 0.859 meaning that it correctly identified 86 percent of those who did not violate their parole. Finally, we can calculate the model accuracy which reveals that it correctly identified 84.4 percent of values. However, we must remember that there are fewer observations of those who did violate parole than those who did not violate parole. We may want to be overly sensitive to ensure the model correctly identifies those who will violate parole. While this would be done to maintain order in society, it may also place unnecessary restrictions or limit the possibilites for those who will not violate parole.  
+
+#### Task 9
+Using a trial and error approach, we will try to identify a probability threshold that maximizes accuracy alone.
+```{r}
+# Using 50 percent as the cutoff
+t2 = table(train$violator,predictions > 0.5)
+t2
+(t2[1,1]+t2[2,2])/nrow(train)
+```
+
+```{r}
+# Using 60 percent as the cutoff
+t3 = table(train$violator,predictions > 0.6)
+t3
+(t3[1,1]+t3[2,2])/nrow(train)
+```
+
+```{r}
+# Using 40 percent as the cutoff
+t4 = table(train$violator,predictions > 0.4)
+t4
+(t4[1,1]+t4[2,2])/nrow(train)
+```
+
+Using 50 percent as the probability threshold, we can see this generates a model with an accuracy of 89.6 percent. If we change that value to 60 percent, the accuracy decreases slightly. If we adjust the threshold to 40 percent, we see the same level of accuracy as the 50 percent threshold. 
+
+#### Task 10
+```{r}
+# Run model on test data
+test.pred <- predict(mod2, test, type = "response")
+
+# Create confusion matrix
+t5 = table(test$violator,test.pred > 0.5)
+t5
+
+# Calculate accuracy
+(t5[1,1]+t5[2,2])/nrow(test)
+```
+
+Running the model on the test data and using the probability threshold that maximizes accuracy in the train data set, we can see that it scores 90 percent accuracy on the test data set.
