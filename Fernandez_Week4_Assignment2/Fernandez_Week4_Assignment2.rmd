@@ -1,0 +1,214 @@
+---
+output:
+  word_document: default
+  html_document: default
+---
+# Classification Trees
+### Miguel Fernandez
+### BAN-502
+
+```{r, message=FALSE}
+# Import libraries
+library(tidyverse)
+library(caret)
+library(rpart)
+library(rattle)
+library(RColorBrewer)
+```
+
+```{r, message=FALSE}
+# Read in data
+parole <- read_csv("parole.csv")
+
+# Recode variables and levels
+parole <- parole %>%
+  mutate(male = as_factor(as.character(male))) %>%
+  mutate(male = fct_recode(male,"male" = "1", "female" = "0")) %>%
+  mutate(race = as_factor(as.character(race))) %>%
+  mutate(race = fct_recode(race,"white" = "1", "not.white" = "2")) %>%
+  mutate(state = as_factor(as.character(state))) %>%
+  mutate(state = fct_recode(state,"ky" = "2",
+                            "la" = "3",
+                            "va" = "4",
+                            "other" = "1")) %>%
+  mutate(multiple.offenses = as_factor(as.character(multiple.offenses))) %>%
+  mutate(multiple.offenses = fct_recode(multiple.offenses,"yes" = "1",
+                                        "no" = "0")) %>%
+  mutate(crime = as_factor(as.character(crime))) %>%
+  mutate(crime = fct_recode(crime,"larceny" = "2",
+                            "drug" = "3",
+                            "driving" = "4",
+                            "other" = "1")) %>%
+  mutate(violator = as_factor(as.character(violator))) %>%
+  mutate(violator = fct_recode(violator,"yes" = "1", "no" = "0"))
+```
+
+#### Task 1
+```{r}
+# Set # random seed
+set.seed(12345)
+# Split data for training and testing
+train.rows <- createDataPartition(y = parole$violator,
+                                  p = 0.7,
+                                  list = FALSE)
+train <- slice(parole, train.rows)
+test <- slice(parole, -train.rows)
+```
+
+#### Task 2
+```{r, fig.width=8, fig.height=6}
+# Create classification tree
+tree1 = rpart(violator ~ ., train, method = "class")
+fancyRpartPlot(tree1)
+```
+
+#### Task 3
+A 40 year old parolee from Louisiana who served a 5 year prison sentence could violate their parole or they could not. It depends on their race according to the classification tree above. Starting with the root node, we move to the right because the parolee is from Louisiana which is not listed in the expression. This leads to a node about race. If the parolee is white then they are not likely to violate their parole. However, if they are any other race, the next node asks was their prison sentence greater than or equal to 3.9 years. In our example, the person did serve more than 3.9 years. They served 5 years so this leads to the left and a node regarding age. The parolee is 40 years old which returns a no from the expression and the model concludes that this person will violate their parole. 
+
+#### Task 4
+```{r}
+# Assessment of model
+printcp(tree1)
+plotcp(tree1)
+```
+
+Looking at the CP table, the complexity parameter that generates the lowest cross-validated error is 0.03. What is interesting is that there will be zero splits to achieve that result.
+
+#### Task 5
+```{r}
+# Prune tree back
+tree2 = prune(tree1,cp = tree1$cptable[which.min(tree1$cptable[,"xerror"]),"CP"])
+printcp(tree2)
+```
+
+```{r}
+# Check majority group
+train %>% 
+  group_by(violator) %>%
+  summarise(no_rows = length(violator))
+```
+
+From the table above, we can see that `no` is the majority in the data set. In fact, `yes` responses only represent 11 percent of the data as seen in the Root node error in the complex Parameter table.
+
+#### Task 6
+```{r}
+# Predict using training set
+treepred = predict(tree1, train, type = "class")
+head(treepred)
+```
+
+```{r}
+# Create confusion matrix
+confusionMatrix(treepred, train$violator, positive = "yes")
+```
+
+The model has an accuracy of 0.90 which looks pretty good. The no information rate is 0.88 which is below the accuracy of the model. This means that if the model predicted `no` for all responses, it would have an accuracy of 0.88. The model does a great job predicting all the true negatives with a specificity of 0.95. However, it correctly identified only 50 percent of all the positives. Given that there are so few parole violators in the data set, this isn't horrible. If the purpose of the model is to identify those that are likely to violate parole, then some adjustments must be made to improve sensitivity. 
+
+#### Task 7
+```{r}
+# Predict using testing set
+treepred1 = predict(tree1, test, type = "class")
+head(treepred1)
+```
+
+```{r}
+# Create confusion matrix
+confusionMatrix(treepred1, test$violator, positive = "yes")
+```
+
+The model performed nearly identical on the testing data as it did on the training data. Measures of accuracy, no information rate, sensitivity and specificity are very close between the two models. Therefore, we can conclude that the model fits the data well and is not subject to over fitting.
+
+#### Task 8
+```{r, message=FALSE}
+# Read in data
+blood <- read_csv("Blood.csv")
+# Create factor
+blood <- blood %>%
+  mutate(DonatedMarch = as_factor(as.character(DonatedMarch))) %>%
+  mutate(DonatedMarch = fct_recode(DonatedMarch,"Yes" = "1", "No" = "0"))
+```
+
+#### Task 9
+```{r}
+# Set # random seed
+set.seed(1234)
+# Split data for training and testing
+train.rows.b <- createDataPartition(y = blood$DonatedMarch,
+                                    p = 0.7,
+                                    list = FALSE)
+train.b <- slice(blood, train.rows.b)
+test.b <- slice(blood, -train.rows.b)
+```
+
+```{r}
+tree.b = rpart(DonatedMarch ~ ., train.b, method = "class")
+fancyRpartPlot(tree.b)
+```
+
+Looking at the decision tree, we see that the only variable not used is `TotalDonated`. This variable looks like a measure of the amount of blood each observation has given. The variable `TotalDonations` which is included in the model is likely a near-perfect predictor of `TotalDonated` which would cause the variable to be left out of the model.
+
+```{r}
+# Assessment of model
+printcp(tree.b)
+plotcp(tree.b)
+```
+
+Looking at the plot above, we can see that a complexity parameter of 0.01 does not yield the lowest cross-validated error. When we examine the table, a complexity parameter of 0.016 yields the smallest error of 0.88. To achieve these results there would need to be three splits in the model. Pruning the classification tree back will reveal those three splits needed.
+
+#### Task 10
+```{r}
+# Prune the tree
+tree.b2 = prune(tree.b,cp = tree.b$cptable[which.min(tree.b$cptable[,"xerror"]),"CP"])
+
+# Plot the tree
+fancyRpartPlot(tree.b2)
+```
+
+Pruning the tree back results in a much simpler tree that is unlikely to over fit the data. This model uses the same three variables as the first model, but with many less splits.
+
+```{r}
+# Print cp table
+printcp(tree.b2)
+```
+
+The table above verifies that the tree was pruned back to the lowest error rate. The new model will be applied to the training and testing data sets and the performance will be measured using a confusion matrix.
+
+```{r}
+# Predictions on the training set
+treepred.b = predict(tree.b2, train.b, type = "class")
+head(treepred.b)
+```
+
+```{r}
+# Create confusion matrix
+confusionMatrix(treepred.b, train.b$DonatedMarch, positive = "Yes")
+```
+
+The confusion matrix and statistics table above reveals an accuracy of 81 percent on the training data. The no information rate is 76 percent meaning the model performed better than just predicting "no" for all observations. This is confirmed by the p-value of less than 0.05 for accuracy being greater than the no information rate. However, the model performed less than ideal classifying true positives. It correctly identified less than half of the positive values while 93 percent of the true negatives were correctly identified. One possible scenario where this model would perform well is if we were trying to market or advertise to a population to donate blood. We would want to target those who have not donated yet. However, these results are from the training data, so lets see if our possible scenario plays out well on the testing data.
+
+```{r}
+# Predictions on the testing data
+treepred.b2 = predict(tree.b2, test.b, type = "class")
+head(treepred.b2)
+```
+
+```{r}
+# Create confusion matrix
+confusionMatrix(treepred.b2, test.b$DonatedMarch, positive = "Yes")
+```
+
+The model did not perform as well on the testing data set. The no information rate is slightly higher than the model accuracy meaning it would perform better predicting "no" for every observation. However, model specificity is strong at 88 percent which would still make it a decent model for the hypothetical marketing example above.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
