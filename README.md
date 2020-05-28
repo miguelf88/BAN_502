@@ -1,2 +1,2 @@
 # BAN - 502
-This repository contains files for UNCW's Predictive Analytics class.
+This repository contains assignments completed for UNCW's Predictive Analytics class.
