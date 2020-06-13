@@ -1,0 +1,352 @@
+---
+output:
+  word_document: default
+  html_document: default
+---
+# Module 5 Assignment 1
+## Miguel Fernandez
+## BAN-502
+
+```{r, message=FALSE}
+# Import libraries
+library(tidyverse)
+library(caret)
+library(nnet)
+library(rpart)
+library(ranger)
+library(caretEnsemble)
+library(xgboost)
+```
+
+```{r, message=FALSE, warning=FALSE}
+# Read in data
+fin = read_csv("2018Fin.csv")
+```
+
+```{r}
+# Preview structure and summary of dataframe
+# str(fin)
+# summary(fin)
+```
+
+```{r}
+# Data cleaning
+fin = fin %>%
+  select(Class, `Revenue Growth`, `EPS Diluted`, `EBITDA Margin`,
+         priceBookValueRatio, debtEquityRatio, debtRatio,
+         `PE ratio`, Sector, `5Y Revenue Growth (per Share)`,
+         returnOnAssets, returnOnEquity, returnOnCapitalEmployed,
+         quickRatio) %>%
+  drop_na() %>%
+  mutate(Class = as.factor(Class),
+         Class = fct_recode(Class, "No" = "0", "Yes" = "1"),
+         Sector = as.factor(Sector)
+        ) %>%
+  filter(`Revenue Growth` <= 1) %>%
+  filter(`EPS Diluted` >= -10, `EPS Diluted` <= 10) %>%
+  filter(`EBITDA Margin` >= -5, `EBITDA Margin` <= 5) %>%
+  filter(priceBookValueRatio >= 0, priceBookValueRatio <= 5) %>%
+  filter(debtEquityRatio >= -1, debtEquityRatio <= 2) %>%
+  filter(debtRatio <= 1) %>%
+  filter(`PE ratio` <= 100) %>%
+  filter(returnOnAssets >= -5, returnOnAssets <= 5) %>%
+  filter(returnOnEquity >= -5, returnOnEquity <= 5) %>%
+  filter(returnOnCapitalEmployed >= -2, returnOnCapitalEmployed <= 2) %>%
+  filter(quickRatio <= 20)
+```
+
+#### Task 1
+```{r}
+# Split data into train and test sets
+set.seed(12345)
+train.rows <- createDataPartition(y=fin$Class,
+                                  p=0.7,
+                                  list = FALSE)
+train <- dplyr::slice(fin, train.rows)
+test <- dplyr::slice(fin, -train.rows)
+```
+
+#### Task 2
+```{r}
+# To measure run time
+# start_time = Sys.time()
+# 
+# # Set controls
+# set.seed(1234)
+# fitControl = trainControl(method = "cv", 
+#                            number = 10)
+# 
+# # Create grid
+# nnetGrid =  expand.grid(size = 1:23,
+#                         decay = c(0.5, 0.1, 1e-2, 1e-3,
+#                                   1e-4, 1e-5, 1e-6, 1e-7))
+# set.seed(1234)
+# # Fit the model
+# nnetFit = train(x = fin[ , -1], y = fin$Class, 
+#                 method = "nnet",
+#                 trControl = fitControl,
+#                 tuneGrid = nnetGrid,
+#                 trace = FALSE,
+#                 verbose = FALSE
+#                 )
+# 
+# end_time = Sys.time()
+# end_time-start_time
+```
+
+```{r}
+# # Save and remove model
+# saveRDS(nnetFit,"nnetfit.rds")
+# rm(nnetFit)
+```
+
+```{r}
+# Read in model
+nnetFit = readRDS("nnetfit.rds")
+```
+
+#### Task 3
+```{r}
+# Create predictions on the train set
+predNet = predict(nnetFit, train)
+
+# Create confusion matrix
+confusionMatrix(predNet, train$Class, positive = "Yes")
+```
+
+The neural network created above has an accuracy of approximately 80 percent on the train data. This is a fairly strong score given a naive model of around 66 percent. Looking at the lower-level metrics, the model has a sensitivity of 91 percent and a specificity of 58 percent. The model does very well predicting which stocks will increase in price which is a good start to any trading strategy. But how will the model perform on the test data set.
+
+#### Task 3
+```{r}
+# Create predictions on the test set
+predNetTest = predict(nnetFit, test)
+
+# Create confusion matrix
+confusionMatrix(predNetTest, test$Class, positive = "Yes")
+```
+
+There is slight degradation in model performance on the test set compared to the train set. Here the accuracy drops to 76 percent but does outperform the naive model. Again, sensitivity is high while specificity drops below 50 percent.
+
+#### Task 5
+```{r}
+# Set control
+ctrl = trainControl(
+  method = "cv",
+  number = 5,
+  savePredictions = "final",
+  classProbs = TRUE,
+  summaryFunction = twoClassSummary,
+  index=createResample(train$Class)
+)
+```
+
+```{r}
+# start_time = Sys.time()
+# # Build ensemble
+# set.seed(111)
+# model_list = caretList(
+#   x = train[ , -1], y = train$Class,
+#   metric = "ROC",
+#   trControl = ctrl,
+#   methodList = c("glm","rpart"),
+#   tuneList = list(ranger = caretModelSpec(method = "ranger",
+#                                       max.depth = 5,
+#                                       tuneGrid = expand.grid(mtry = 1:13,
+#                                                              splitrule = c("gini",
+#                                                                            "extratrees",
+#                                                                            "hellinger"), 
+#                                                              min.node.size = 1:5)),
+#               nn = caretModelSpec(method = "nnet",
+#                                   tuneGrid = expand.grid(size = 1:23, 
+#                                                          decay = c(0.5, 0.1, 1e-2, 1e-3,
+#                                                                    1e-4, 1e-5, 1e-6, 1e-7)),
+#                                   trace = FALSE))
+#   )
+# 
+# end_time = Sys.time()
+# end_time-start_time
+```
+
+```{r}
+# # Save and remove model
+# saveRDS(model_list,"model_list.rds")
+# rm(model_list)
+```
+
+```{r}
+# Read in model
+model_list = readRDS("model_list.rds")
+```
+
+#### Task 6
+```{r}
+# Create matrix for model correlation
+modelCor(resamples(model_list))
+```
+
+The correlation matrix reveals a strong positive correlation coefficient of 0.89 between the neural network and the logistic regression model. There are also moderately strong relationships between the random forest and the three other models; the neural network, the logistic regression and the classification tree. The coefficients range from 0.61 to 0.66. The weakest correlation is between the neural network and the classification tree, with a coefficient of 0.43. Ideally, the correlations should be weak, near zero, but that is not always the case.
+
+#### Task 7
+```{r}
+ensemble = caretEnsemble(model_list,
+                         metric="ROC",
+                         trControl=ctrl)
+summary(ensemble)
+```
+
+The table above shows that the random forest has the highest AUC of 0.72. The neural network and logistic regression performed nearly as well, both scoring an AUC of approximately 0.7. The classification tree performed the worst with an AUC of 0.64. How does the ensemble model perform on the train and test data?
+
+```{r}
+# Predictions for train set
+pred_ensemble = predict(ensemble, train, type = "raw")
+confusionMatrix(pred_ensemble, train$Class, positive = "Yes")
+
+# Predictions for test set
+pred_ensemble_test = predict(ensemble, test, type = "raw")
+confusionMatrix(pred_ensemble_test, test$Class, positive = "Yes")
+```
+
+The ensemble model has a slightly lower accuracy than the neural network from above. The sensitivity is 96 percent in the train data which is close to near-perfect predictions of stocks that increased in value. Using the test data set, the ensemble model's accuracy is approaching the naive model's performance. However, measures of sensitivity are high in both the train and the test data sets. This model could represent a solid approach for value investors who are looking to identify stocks to buy and hold over a long period of time. 
+
+#### Task 8
+```{r}
+# Set control
+ctrl2 = trainControl(
+  method = "cv",
+  number = 10,
+  savePredictions = "final",
+  classProbs = TRUE,
+  summaryFunction = twoClassSummary,
+  index=createResample(train$Class)
+)
+
+stack = caretStack(
+  model_list,
+  method ="glm",
+  metric ="ROC",
+  trControl = ctrl2
+)
+
+print(stack)
+summary(stack)
+```
+
+```{r}
+# Predictions for train set
+pred_stack = predict(stack, train, type = "raw")
+confusionMatrix(pred_stack, train$Class, positive = "Yes")
+
+# Predictions for test set
+pred_stack_test = predict(stack, test, type = "raw")
+confusionMatrix(pred_stack_test, test$Class, positive = "Yes")
+```
+
+The model performance is identical between the ensemble model and the stacked model. 
+
+#### Task 9
+```{r}
+# Create train and test set for xgboost model
+set.seed(12345) 
+train.rows = createDataPartition(y = fin$Class, p = 0.7, list = FALSE)
+train.boost = dplyr::slice(fin, train.rows)
+test.boost = dplyr::slice(fin, -train.rows)
+```
+
+```{r}
+# Create dummy variables in train set
+train_dummy.boost = dummyVars(" ~ .", data = train.boost)
+train_xgb = data.frame(predict(train_dummy.boost, newdata = train.boost))
+
+# Preview structure
+str(train_xgb)
+```
+
+```{r}
+# Create dummy variables in test set
+test_dummy.boost = dummyVars(" ~ .", data = test.boost)
+test_xgb = data.frame(predict(test_dummy.boost, newdata = test.boost))
+```
+
+```{r}
+# Remove extra Class variable
+train_xgb = train_xgb %>% dplyr::select(-Class.No)
+test_xgb = test_xgb %>% dplyr::select(-Class.No)
+```
+
+```{r}
+# # Measure model run time
+# start_time = Sys.time()
+# 
+# set.seed(999)
+# # Set control
+# ctrl3 = trainControl(method = "cv",
+#                      number = 5)
+# 
+# # Tune the model model
+# tgrid = expand.grid(
+#   nrounds = 100,
+#   max_depth = c(1, 2, 3, 4),
+#   eta = c(0.01, 0.1, 0.2, 0.3),
+#   gamma = 0,
+#   colsample_bytree = c(0.6, 0.8, 1),
+#   min_child_weight = 1,
+#   subsample = c(0.8, 1)
+# )
+# 
+# # Build the model
+# fitxgb = train(as.factor(Class.Yes) ~ .,
+#                 data = train_xgb,
+#                 method="xgbTree",
+#                 tuneGrid = tgrid,
+#                 trControl=ctrl3)
+# 
+# end_time = Sys.time()
+# end_time-start_time
+```
+
+```{r}
+# # Save and remove model
+# saveRDS(fitxgb,"fitxgb.rds")
+# rm(fitxgb)
+```
+
+```{r}
+# Load model
+fitxgb = readRDS("fitxgb.rds")
+```
+
+```{r}
+predxgbtrain = predict(fitxgb, train_xgb)
+confusionMatrix(as.factor(train_xgb$Class.Yes), predxgbtrain, positive = "1")
+
+predxgbtest = predict(fitxgb, test_xgb)
+confusionMatrix(as.factor(test_xgb$Class.Yes), predxgbtest, positive = "1")
+```
+
+The xgb model produced inadequate results. Among the train data and the test data, the xgb model's accuracy did not score as well as the naive model. This means that the model is more accurate if it simply predicted "Yes" for all values in the data set. Using the train data set, the model accuracy is 74 percent while the naive model's accuracy is 83 percent, nearly ten points higher. The difference is even larger in the test data set. The xgb model scored 66 percent accurate and the naive model is 84 percent accurate. There is also significant degradation among sensitivity between the xgb model and the ensemble and stacked models above. Considering the higher chance of not identifying stocks that are likely to increase in price, the xgb model is not an ideal candidate for this data.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
