@@ -1,0 +1,154 @@
+---
+title: "2018 Chicago Crime Analysis"
+resource_files:
+- police_beat_bndry/police_beat_bndry.shx
+output:
+  flexdashboard::flex_dashboard:
+    orientation: columns
+    runtime: shiny
+    vertical_layout: fill
+---
+
+```{r setup, include=FALSE}
+library(flexdashboard)
+library(tidyverse)
+library(lubridate)
+library(ggmap)
+library(sf)
+library(stringr)
+library(VIM)
+library(gridExtra)
+library(janitor)
+library(pryr)
+
+
+df <- read_csv("chicago2.csv")
+
+# Convert Dates
+# Drop columns of no interest
+df <- df %>%
+  mutate(Date = mdy_hms(Date)) %>%
+  select(-c(ID, `Case Number`, `Updated On`,
+            `X Coordinate`, `Y Coordinate`, Location))
+
+# Create variables
+df <- df %>%
+  mutate(
+    date.only = as.Date(Date),
+    hr = hour(Date),
+    day.of.week = weekdays(Date),
+    street.type = str_extract(Block, '\\w+$')
+  )
+
+df <- df %>%
+  drop_na("Location Description", "Ward")
+
+df <- df %>%
+  mutate(
+    IUCR = as_factor(IUCR),
+    Description = as_factor(Description),
+    Arrest = as_factor(as.character(Arrest)),
+    Arrest = fct_recode(Arrest, "Yes" = "TRUE", "No" = "FALSE"),
+    Domestic = as_factor(as.character(Domestic)),
+    Domestic = fct_recode(Domestic, "Yes" = "TRUE", "No" = "FALSE"),
+    Beat = as_factor(Beat),
+    District = as_factor(District),
+    Ward = as_factor(Ward),
+    hr = as_factor(hr),
+    day.of.week = as_factor(day.of.week),
+    street.type = as_factor(street.type),
+    Primary.Type = as_factor(`Primary Type`),
+    Community.Area = as_factor(`Community Area`),
+    FBI.Code = as_factor(`FBI Code`),
+    Location.Description = as_factor(`Location Description`)
+  ) %>%
+  select(-c(`Primary Type`, `Community Area`,
+            `FBI Code`, `Location Description`))
+
+# Sort the Type by count
+df$Primary.Type <- reorder(df$Primary.Type, df$Primary.Type, FUN = length)
+# Replace levels with fewer than 25 observations with Other
+levels(df$Primary.Type)[table(df$Primary.Type) < 25] <- 'RARE CRIMES'
+
+
+# Set order for day of week variable
+df$day.of.week <- factor(df$day.of.week,
+                         levels = c("Monday", "Tuesday",
+                                    "Wednesday", "Thursday",
+                                    "Friday", "Saturday", "Sunday"))
+
+t.plot <- df %>%
+  group_by(hr, day.of.week) %>%
+  tally() %>%
+  rename("Num.of.Crimes" = n)
+
+# Set order for day of week variable
+df$day.of.week <- factor(df$day.of.week,
+                         levels = c("Monday", "Tuesday",
+                                    "Wednesday", "Thursday",
+                                    "Friday", "Saturday", "Sunday"))
+
+dow <- df %>% group_by(day.of.week)
+```
+
+Row
+-----------------------------------------------------------------------
+
+### Day of Week
+
+```{r}
+ggplot(dow, aes(x = day.of.week, fill = Arrest)) +
+  geom_bar() +
+  ggtitle("Number of Crimes and Arrests by Day of Week") +
+  xlab("Day of Week") +
+  ylab("Count")
+```
+
+Row {.tabset .tabset-fade}
+-----------------------------------------------------------------------
+
+### By Day and Time
+
+```{r}
+ggplot(t.plot, aes(x = hr, y = Num.of.Crimes,
+              group = day.of.week,
+              color = day.of.week)) +
+  geom_line(size = 1.25) +
+  geom_point(size = 2.1) +
+  theme(legend.position = "bottom") +
+  ggtitle("Number of Crimes by Hour and Day of Week") +
+  xlab("Hour of Day") +
+  ylab("Count")
+```
+
+### By Type
+
+```{r}
+ggplot(df, aes(x = Primary.Type)) +
+   geom_bar(fill = "#00BFC4") +
+   ggtitle("Number of Crimes by Type") +
+   xlab("Type of Crime") +
+   ylab("Count") +
+   coord_flip()
+```
+
+### By Location
+
+```{r}
+by_loc <- df %>%
+  group_by(Location.Description, Arrest) %>%
+  tally() %>%
+  rename("Num.of.Crimes" = n) %>%
+  filter(Num.of.Crimes >= 25)
+
+ggplot(by_loc, aes(x = Location.Description,
+                   y = Num.of.Crimes,
+                   fill = Arrest)) +
+  geom_col() +
+  ggtitle("Location of Crime") +
+  xlab("Location Description") +
+  ylab("Number of Crimes") +
+  theme(legend.position = "bottom") +
+  coord_flip()
+```
+

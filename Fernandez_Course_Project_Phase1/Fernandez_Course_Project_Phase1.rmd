@@ -1,0 +1,484 @@
+---
+output:
+  html_document: default
+  word_document: default
+---
+# Chicago Crime Exploratory Data Analysis
+## Course Project Phase 1
+### Miguel Fernandez  
+
+The following analysis represents Phase 1 of the BAN-502 course project at the University of North Carolina - Wilmington. This analysis will thoroughly examine a crime data set from the Chicago Police Department in Illinois. The data set contains 15,000 observations from January 1, 2018 through December 30, 2018. Phase 1 will consist of data cleaning and exploratory analysis to identify patterns and variables that may help inform a model that will attempt to predict the `Arrest` variable. Model building will be completed in Phase 2.  
+
+```{r, message=FALSE}
+# Import libraries
+library(tidyverse)
+library(lubridate)
+library(ggmap)
+library(sf)
+library(stringr)
+library(VIM)
+library(wrapr)
+library(gridExtra)
+library(janitor)
+library(pryr)
+
+# Set global theme
+theme_set(theme_bw())
+
+# Set behavior for wrapr
+apply_left.gg <- function(pipe_left_arg,
+                          pipe_right_arg,
+                          pipe_environment,
+                          left_arg_name,
+                          pipe_string,
+                          right_arg_name) {
+  pipe_right_arg <- eval(pipe_right_arg,
+                         envir = pipe_environment,
+                         enclos = pipe_environment)
+  pipe_left_arg + pipe_right_arg 
+}
+
+
+```
+
+```{r, warning=FALSE, message=FALSE}
+# Read in data
+df <- read_csv("chicago2.csv")
+
+# Convert Dates
+# Drop columns of no interest
+df <- df %>%
+  mutate(Date = mdy_hms(Date)) %>%
+  select(-c(ID, `Case Number`, `Updated On`,
+            `X Coordinate`, `Y Coordinate`, Location))
+```
+
+Preview the structure of the data and generate quick summary statistics.
+
+```{r}
+str(df)
+summary(df)
+```
+
+The data set contains information about the type of crime, whether or not it was domestic or if the offender was arrested. There are also several geographic variables including block, beat, district and ward. We will create additional variables to help inform the analysis. 
+
+```{r}
+# Create variables
+df <- df %>%
+  mutate(
+    date.only = as.Date(Date),
+    hr = hour(Date),
+    day.of.week = weekdays(Date),
+    street.type = str_extract(Block, '\\w+$')
+  )
+```
+
+Perform a check for any missing values in the data set.
+
+```{r, fig.width=11, fig.height=5}
+vim_plot = aggr(df, numbers = TRUE,
+                prop = c(TRUE, FALSE), cex.axis = 0.7)
+```
+
+There appears to be a column with missing values but the name of the variable does not appear on the plot. A list of column names will help determine which ones are missing from the plot. 
+
+```{r}
+colnames(df)
+```
+
+`Location Description` and `Community Area` are the two variables that do not appear in the plot and the former contains the missing values. There is also one missing value from the `Ward` variable. The observations with missing values from the `Location Description` and `Ward` columns will be removed because those missing values are less than one half percent of data set and will not have much impact on the model. The missing coordinate pairs are of no concern to the analysis.    
+
+```{r}
+df <- df %>%
+  drop_na("Location Description", "Ward")
+```
+
+Confirm the correct rows were removed.
+
+```{r, fig.width=11, fig.height=5}
+vim_plot = aggr(df, numbers = TRUE,
+                prop = c(TRUE, FALSE), cex.axis = 0.7)
+```
+
+Further data cleaning still needs to be completed. Several of the character variables need to be converted to factors before further analysis can be done. This will also improve processing time. The following function will return the size of an object.
+
+```{r}
+object_size(df)
+```
+
+Before conversion, the data frame is 3.09 megabytes.
+
+```{r, warning=FALSE}
+df <- df %>%
+  mutate(
+    IUCR = as_factor(IUCR),
+    Description = as_factor(Description),
+    Arrest = as_factor(as.character(Arrest)),
+    Arrest = fct_recode(Arrest, "Yes" = "TRUE", "No" = "FALSE"),
+    Domestic = as_factor(as.character(Domestic)),
+    Domestic = fct_recode(Domestic, "Yes" = "TRUE", "No" = "FALSE"),
+    Beat = as_factor(Beat),
+    District = as_factor(District),
+    Ward = as_factor(Ward),
+    hr = as_factor(hr),
+    day.of.week = as_factor(day.of.week),
+    street.type = as_factor(street.type),
+    Primary.Type = as_factor(`Primary Type`),
+    Community.Area = as_factor(`Community Area`),
+    FBI.Code = as_factor(`FBI Code`),
+    Location.Description = as_factor(`Location Description`)
+  ) %>%
+  select(-c(`Primary Type`, `Community Area`,
+            `FBI Code`, `Location Description`))
+```
+
+```{r}
+object_size(df)
+```
+
+Factoring was able to reduce the size of the data frame by 65,000 kilobytes which should offer more efficient processing.
+
+Now that the data has been cleaned, visualization and analysis can begin. The first plot will look at whether or not someone was arrested against whether or not the offense was domestic or not.
+
+```{r}
+# Examine the Arrest Variable against Domestic
+ggplot(df, aes(x = Arrest, fill = Domestic)) +
+  geom_bar(position = "dodge") +
+  ggtitle("Arrests by Domestic Offenses")
+```
+
+One of the first conclusions drawn from the data is that there are many more non-arrests than there are arrests. Domestic crimes represent a small portion of the data set. The following table with provide a quantitative measure of how many arrests were made in 2018 compared to crimes but no arrests.
+
+```{r}
+tabyl(df$Arrest, sort = TRUE)
+```
+
+Of the 15,000 crimes in the data set that occurred in Chicago in 2018, approximately 80 percent have had no arrests made. Special considerations will need to be made during the model building to account for the skewness in the arrest variable. The following chart will visualize the distribution of crimes by type.
+
+```{r, fig.height=6, fig.width=9}
+# Sort the Type by count
+df$Primary.Type <- reorder(df$Primary.Type, df$Primary.Type, FUN = length)
+
+ggplot(df, aes(x = Primary.Type)) +
+  geom_bar(fill = "#00BFC4") +
+  ggtitle("Number of Crimes by Type") +
+  xlab("Type of Crime") +
+  ylab("Count") +
+  coord_flip()
+```
+
+There seem to be several types of crimes with only a few observations. Those levels with fewer than 25 observations will be grouped into a new level called `RARE CRIMES`.
+
+```{r, fig.height=6, fig.width=9}
+# Sort the Type by count
+df$Primary.Type <- reorder(df$Primary.Type, df$Primary.Type, FUN = length)
+# Replace levels with fewer than 25 observations with Other
+levels(df$Primary.Type)[table(df$Primary.Type) < 25] <- 'RARE CRIMES'
+
+# Recreate plot from above to confirm grouping
+ggplot(df, aes(x = Primary.Type)) +
+   geom_bar(fill = "#00BFC4") +
+   ggtitle("Number of Crimes by Type") +
+   xlab("Type of Crime") +
+   ylab("Count") +
+   coord_flip()
+```
+
+The plot above shows Theft to be the most common type of crime followed by Battery, Criminal Damage and Assault. The table below shows the count for each type of crime and its proportion in the data set.
+
+```{r}
+tabyl(df$Primary.Type, sort = TRUE)
+```
+
+Thefts account for nearly a quarter of the data set with more than 3,600 reported in 2018. Less than one percent of the crimes were homicides, with 41 observations in the data set. The type of crime is likely to be an important predictor for whether or not a suspect is arrested. The plot below will examine the type of crime and the arrest variable.
+
+```{r, fig.width=8, fig.height=5}
+ggplot(df, aes(x = Primary.Type, fill = Arrest)) +
+   geom_bar() +
+   ggtitle("Number of Crimes by Type") +
+   xlab("Type of Crime") +
+   ylab("Count") +
+   coord_flip()
+```
+
+The plot shows some interesting results. It appears that all crimes dealing with narcotics end in arrest. While there are fewer crimes involving interference with a public officer, those crimes all end with an arrest too. A majority of the types of crimes end with no arrest. A proportion table will provide finer grain details..
+
+```{r}
+t1 = table(df$Primary.Type, df$Arrest)
+round(prop.table(t1, margin = 1),2)
+```
+
+Using the date variable that was created above will help to visualize the distribution of crimes throughout the year.
+
+```{r, message=FALSE, fig.width=9, fig.height=7}
+# Crimes by Date
+p1 <- df %.>%
+  group_by(., date.only) %.>%
+  tally(.) %.>%
+  rename(., "Num.of.Crimes" = n) %.>%
+  ggplot(., aes(x = date.only, y = Num.of.Crimes)) %.>%
+  geom_line(color = '#33434A') %.>%
+  geom_smooth(color = "#F8766D",
+              se = FALSE,
+              linetype = "dashed") %.>%
+  ggtitle("Number of Crimes by Date") %.>%
+  xlab("Date") %.>%
+  ylab("Count")
+
+# Arrests by Date
+p2 <- df %.>%
+  filter(., Arrest == "Yes") %.>%
+  group_by(., date.only) %.>%
+  tally(.) %.>%
+  rename(.,"Num.of.Crimes" = n) %.>%
+  ggplot(., aes(x = date.only, y = Num.of.Crimes)) %.>%
+  geom_line(color = "#33434A") %.>%
+  geom_smooth(color = "#F8766D",
+              se = FALSE,
+              linetype = "dashed") %.>%
+  ggtitle("Number of Arrests by Date") %.>%
+  xlab("Date") %.>%
+  ylab("Count")
+
+# Non Arrests by Date
+p3 <- df %.>%
+  filter(., Arrest == "No") %.>%
+  group_by(., date.only) %.>%
+  tally(.) %.>%
+  rename(.,"Num.of.Crimes" = n) %.>%
+  ggplot(., aes(x = date.only, y = Num.of.Crimes)) %.>%
+  geom_line(color = "#33434A") %.>%
+  geom_smooth(color = "#F8766D",
+              se = FALSE,
+              linetype = "dashed") %.>%
+  ggtitle("Number of Crimes but No Arrest by Date") %.>%
+  xlab("Date") %.>%
+  ylab("Count")
+
+grid.arrange(p1, p2, p3, ncol = 1)
+```
+
+The three plots above show the number of crimes by date, the number of arrests by date and the number of crimes but no arrests by date. There tends to be more crimes during the summer months, peaking around July. However, the second plot reveals that the number of arrests remains constant, around 7 or 8 arrests a day, even in the summer months when the number of crimes increases. There also appears to be significant fluctuations in the data with swinging from low to high very quickly. This might be caused by more crimes occurring on the weekends. Another interesting pattern visible in the plots is the spike at the beginning of the year. This spike is present in the total crimes plot and the no arrest plot but is absent in the number of arrests plot. We can conclude that there are several more crimes on New Year's Eve but they are likely to be minor as the number of arrests remain low.
+
+```{r, fig.width=9, fig.height=5}
+# Set order for day of week variable
+df$day.of.week <- factor(df$day.of.week,
+                         levels = c("Monday", "Tuesday",
+                                    "Wednesday", "Thursday",
+                                    "Friday", "Saturday", "Sunday"))
+
+df %.>%
+  group_by(., day.of.week) %.>%
+  ggplot(., aes(x = day.of.week, fill = Arrest)) %.>%
+  geom_bar() %.>%
+  ggtitle("Number of Crimes and Arrests by Day of Week") %.>%
+  xlab("Day of Week") %.>%
+  ylab("Count")
+```
+  
+There is a slight increase in the number crimes and arrests on the weekends. That is expected as many more people are out on the weekend than during the week. The next plot with visualize the number of crimes by the hour in which they occurred and on what day of the week.  
+
+```{r, fig.width=9, fig.height=6}
+# Set order for day of week variable
+df$day.of.week <- factor(df$day.of.week,
+                         levels = c("Monday", "Tuesday",
+                                    "Wednesday", "Thursday",
+                                    "Friday", "Saturday", "Sunday"))
+
+df %.>%
+  group_by(., hr, day.of.week) %.>%
+  tally(.) %.>%
+  rename(., "Num.of.Crimes" = n) %.>%
+  ggplot(., aes(x = hr, y = Num.of.Crimes,
+                group = day.of.week,
+                color = day.of.week)) %.>%
+  geom_line(size = 1.25) %.>%
+  geom_point(size = 2.1) %.>%
+  theme(legend.position = "bottom") %.>%
+  ggtitle("Number of Crimes by Hour and Day of Week") %.>%
+  xlab("Hour of Day") %.>%
+  ylab("Count")
+```
+
+The plot reveals fairly consistent patterns across the weekdays. However, there are a few exceptions. For instance, late night on Friday's and Saturday's are higher than other days and carry into the early mornings of Saturday and Sunday. There tends to be more crimes in the early morning hours of Saturday and Sunday between 1:00 AM and 5:00 AM. There is also a sharp rise in the number of crimes observed occurs between 7:00 AM and 9:00 AM across all days. One possible explanation for this is as people begin to wake up and realize a crime was committed overnight, they report it. A second possible explanation is that everyone is now going about their day and as more people are out, there is a higher likelihood that a crime will be committed. The plot does support this second hypothesis as the number of crimes is high throughout the day and into the evening while more people are about. The number of reported crimes drops around 1:00 AM for most days when the population returns home and is in for the night.  There is also an interesting data point at 6:00 PM on Wednesdays. This time has the highest number of crimes for any day at any time. We will examine the crimes on Wednesday at 6:00 PM further.
+
+```{r, fig.width=8}
+df %.>%
+  filter(., hr == 18, day.of.week == "Wednesday") %.>%
+  ggplot(., aes(x = Primary.Type)) %.>%
+  geom_bar(fill = "#F8766D") %.>%
+  coord_flip() %.>%
+  ggtitle("Crimes on Wednesday's at 6:00 PM") %.>%
+  xlab("Type of Crime") %.>%
+  ylab("Count")
+```
+
+The pattern of crimes on Wednesday's at 6:00 PM is consistent with the overall pattern of the types of crimes. Theft, battery and criminal damage are the top three.  
+  
+The `street.type` variable contains the ending of the `Block` variable which attempts to capture the street suffix the crime occurred on. We will filter for some of the most common types.
+  
+```{r}
+# Subset street type
+s.type <- df %>%
+  filter(street.type == "AVE" |
+         street.type == "RD" |
+         street.type == "PL" |
+         street.type == "ST" |
+         street.type == "DR" |
+         street.type == "BLVD")
+
+# Refactor street type variable
+s.type$street.type <- factor(s.type$street.type)
+
+# Generate table of street type
+tabyl(s.type$street.type, sort = TRUE)
+```
+
+This table contains the most common values for street suffix. We can see that avenues account for just over 50 percent of crimes. The second most common type for crimes is street. Those will be broken down further and to see how it influences arrest.
+
+```{r}
+t2 = table(s.type$street.type, s.type$Arrest)
+round(prop.table(t2, margin = 1),2)
+```
+
+The table reveals that the street suffix does not have much of an effect on the arrest variable. Arrest/no arrest are approximately split 20/80 across all street types. The variable `Location.Description` contains information about where the crime occurred.
+
+```{r, fig.width=9, fig.height=7}
+df %.>%
+  group_by(., Location.Description, Arrest) %.>%
+  tally(.) %.>%
+  rename(., "Num.of.Crimes" = n) %.>%
+  filter(., Num.of.Crimes >= 25) %.>%
+  ggplot(., aes(x = Location.Description,
+                y = Num.of.Crimes,
+                fill = Arrest)) %.>%
+  geom_col() %.>%
+  ggtitle("Location of Crime") %.>%
+  xlab("Location Description") %.>%
+  ylab("Number of Crimes") %.>%
+  theme(legend.position = "bottom") %.>%
+  coord_flip()
+```
+
+Looking at the location description for where a crime occurred, there much more variation than the street type variable from above. 
+
+There are 104 different location descriptions in the data set but those with less 26 crimes were filtered out to improve the readability of the chart. Looking at the plot, a majority of crimes occurred on the street with a small percentage ending in arrest. The same pattern is true for several of the top locations including residences and apartments. There are a few exceptions. For example, crimes that occurred on sidewalks tend to have a higher percentage of arrests made than other locations. A selection of the top four locations for crimes will be made to see if a certain crime dominates those locations.
+
+```{r, fig.height=10}
+street <- df %.>%
+  filter(., Location.Description == "STREET") %.>%
+  ggplot(.,  aes(x = Primary.Type)) %.>%
+  geom_bar(fill = "#F8766D") %.>%
+  ggtitle("Crimes on the Street") %.>%
+  xlab("Type of Crime") %.>%
+  ylab("Count") %.>%
+  coord_flip()
+
+apt <- df %.>%
+  filter(., Location.Description == "APARTMENT") %.>%
+  ggplot(.,  aes(x = Primary.Type)) %.>%
+  geom_bar(fill = "#00BFC4") %.>%
+  ggtitle("Crimes in an Apartment") %.>%
+  xlab("Type of Crime") %.>%
+  ylab("Count") %.>%
+  coord_flip()
+
+res <- df %.>%
+  filter(., Location.Description == "RESIDENCE") %.>%
+  ggplot(.,  aes(x = Primary.Type)) %.>%
+  geom_bar(fill = "#F8766D") %.>%
+  ggtitle("Crimes in a Residence") %.>%
+  xlab("Type of Crime") %.>%
+  ylab("Count") %.>%
+  coord_flip()
+
+swlk <- df %.>%
+  filter(., Location.Description == "SIDEWALK") %.>%
+  ggplot(.,  aes(x = Primary.Type)) %.>%
+  geom_bar(fill = "#00BFC4") %.>%
+  ggtitle("Crimes on the Sidewalk") %.>%
+  xlab("Type of Crime") %.>%
+  ylab("Count") %.>%
+  coord_flip()
+
+grid.arrange(street, apt, res, swlk, ncol = 1)
+```
+
+Thefts occur in large numbers on the street. Criminal damage and motor vehicle thefts also occur mostly in the street. Similar patterns exist between apartments and residences. This is intuitive as both are living spaces. There are many cases of battery that occur in living spaces. Another interesting pattern is that crimes on the sidewalk resemble the pattern of living spaces more than it does crimes that occur on the street.
+  
+  
+A large part of crime analysis is analyzing the spatial distribution of incidents. The `sf` package for R contains the tools to accomplish some preliminary mapping.
+
+```{r, fig.width=6, fig.height=5}
+# Read in shapefile
+sdf <- st_read("police_beat_bndry/police_beat_bndry.shp",
+               stringsAsFactors = FALSE, quiet = TRUE)
+
+# Group by Beat ID
+by_beat <- df %>%
+  group_by(Beat) %>%
+  tally() %>%
+  rename("Num.of.Crimes" = n)
+
+# Merge by_beat and sdf by Beat ID
+df1 <- merge(x = by_beat, y = sdf[ , c("beat_num", "geometry")],
+            by.x = "Beat", by.y = "beat_num", all.x = TRUE)
+# Convert df1 to sf object
+df1 <- st_as_sf(df1)
+
+# Map crimes by beat
+ggplot() + 
+  geom_sf(data = df1) + aes(fill = Num.of.Crimes) +
+  scale_fill_gradientn(colors = viridis::viridis(20)) +
+  coord_sf(xlim = c(-87.97, -87.47),
+           ylim = c(41.62, 42.05),
+           expand = FALSE) +
+  ggtitle("Crimes by Police Beat")
+```
+
+The map above visualizes the number of crimes by beat. There are a few outliers present. The bright yellow polygon on the east side of the plot represents 200 crimes that occurred in 2018. There are also a few beats with around 150 crimes reported but the majority of beats appear to have around 100 crimes of less. A similar map below will highlight the number of arrests made.
+
+```{r, fig.width=6, fig.height=5}
+# Filter for arrests and group by beat
+beat_arrest <- df %>%
+  filter(Arrest == "Yes") %>%
+  group_by(Beat) %>%
+  tally() %>%
+  rename("Num.of.Arrests" = n) 
+
+# Merge by_beat and sdf by Beat ID
+df2 <- merge(x = beat_arrest, y = sdf[ , c("beat_num", "geometry")],
+            by.x = "Beat", by.y = "beat_num", all.x = TRUE)
+# Convert df1 to sf object
+df2 <- st_as_sf(df2)
+
+# Map arrests by beat
+ggplot() + 
+  geom_sf(data = df2) + aes(fill = Num.of.Arrests) +
+  scale_fill_gradientn(colors = viridis::viridis(20)) +
+  coord_sf(xlim = c(-87.97, -87.47),
+           ylim = c(41.62, 42.05),
+           expand = FALSE) +
+  ggtitle("Arrests by Police Beat")
+```
+
+Looking at the beats by arrest, a very different story appears. There seems to be a hot spot of arrests to the west that is concentrated around a few neighborhoods. There are also fewer arrests made in the northern portion of the city and approximately 30 to 40 arrests made in several beats to the south. There is also an irregular shaped beat in the north-west corner in the first plot but is missing in the second plot indicating that no arrests were made in that beat. That appears to be the only beat with no arrests. The plot below shows the distribution of crimes and arrests by city district as there was no access to a city district geography file.
+
+```{r, fig.width=9}
+ggplot(df, aes(x = District, fill = Arrest)) +
+  geom_bar(position = "dodge") +
+  ggtitle("Arrests by City District") +
+  ylab("Count") +
+  theme(legend.position = "bottom")
+```
+  
+Looking back on the data, around 80 percent of crimes have had zero arrests made. Crimes vary widely by type and there is a slight up-tick in crimes over the summer months but the number of arrests remain constant. The number of crimes and arrests do not vary much by day of week but there are trends given the hour of the day. Utilizing day of week and hour might prove to be beneficial to a predictive model. There is much variation in the location of the crime as well as whether or not an arrest was made. Using the location description field might prove informative to a model. Analyzing the data spatially, police beats were identified as outliers. Looking at crimes by police beat may be too fine grain. There is more variation looking at the distribution of crimes and arrests by city districts which might be a suitable model variable. However, this is all speculation and will not know how well the variables will perform in the model until several models have been completed and analyzed during the next phase of the project.
+
+```{r}
+# Write to csv
+write.csv(df, "chicago_crimes.csv")
+```
+
+
+
+

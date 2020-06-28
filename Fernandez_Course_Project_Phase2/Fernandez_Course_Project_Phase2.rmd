@@ -1,0 +1,288 @@
+---
+output:
+  word_document: default
+  html_document: default
+---
+# Chicago Crime Model - Phase 2
+### Miguel Fernandez
+### BAN-502
+
+Phase 2 of the BAN-502 course project contains model building efforts using the 2018 crime data set from Chicago, Illinois. Data cleaning and exploratory data analysis was conducted in Phase 1. Several models will be constructed and their performance evaluated before making a recommendation. We will begin by reading in the data and performing feature engineering. 
+
+```{r, message=FALSE, warning=FALSE}
+library(tidyverse)
+library(caret)
+library(nnet)
+library(rpart)
+library(ranger)
+library(caretEnsemble)
+library(lubridate)
+```
+
+```{r, message=FALSE, warning=FALSE}
+# Read in data
+df = read_csv("chicago_crimes.csv")
+```
+
+```{r, warnings=FALSE}
+# Convert variables to factors
+df <- df %>%
+  mutate(
+    Arrest = as_factor(as.character(Arrest)),
+    Arrest = fct_recode(Arrest, "Yes" = "TRUE", "No" = "FALSE"),
+    Domestic = as_factor(as.character(Domestic)),
+    Domestic = fct_recode(Domestic, "Yes" = "TRUE", "No" = "FALSE"),
+    Primary.Type = as_factor(Primary.Type),
+    Location.Description = as_factor(Location.Description),
+    date.only = as.Date(Date),
+    hr = hour(Date),
+    hr = as_factor(hr),
+    mnth = month(Date),
+    mnth = as_factor(mnth),
+    day.of.week = weekdays(Date),
+    day.of.week = as_factor(day.of.week),
+    day.of.month = day(Date),
+    day.of.month = as_factor(day.of.month),
+    street.type = str_extract(Block, '\\w+$'),
+    street.type = as_factor(street.type),
+    hr = as_factor(hr),
+    day.of.week = as_factor(day.of.week),
+    street.type = as_factor(street.type)
+  )
+
+# Reduce the number of factor levels  
+levels(df$Primary.Type)[table(df$Primary.Type) < 200] <- 'Other'
+levels(df$Location.Description)[table(df$Location.Description) < 200] <- 'Other'
+levels(df$street.type)[table(df$street.type) < 200] <- 'Other'
+```
+
+We will select a subset of the data for modeling. 
+
+```{r}
+df2 = df %>%
+  select(Arrest, Domestic, hr, day.of.week,
+         Primary.Type, Location.Description,
+         day.of.month, mnth, street.type,)
+```
+
+The data will be split into a train set and a test set using the `createDataPartition` function.
+
+```{r}
+# Split data into train and test sets
+set.seed(1234)
+train.rows <- createDataPartition(y=df2$Arrest,
+                                  p=0.7,
+                                  list = FALSE)
+train <- dplyr::slice(df2, train.rows)
+test <- dplyr::slice(df2, -train.rows)
+```
+
+Now that the data set is split, we will begin by building a random forest model. But first a control object will be used to provide a set of parameters to the model.
+
+```{r}
+# Set control
+ctrl = trainControl(
+  method = "cv",
+  number = 10,
+  savePredictions = "final",
+  classProbs = TRUE,
+  summaryFunction = twoClassSummary,
+  index=createResample(train$Arrest)
+)
+```
+
+
+```{r}
+# # Measure model run time
+# start_time = Sys.time()
+# 
+# # Fit random forest model to train data
+# rf_fit = train(x = as.matrix(train[, -1]),
+#                y=as.matrix(train$Arrest),
+#                method = "ranger",
+#                importance = "permutation",
+#                num.trees = 100,
+#                trControl = ctrl)
+# 
+# # Measure model run time
+# end_time = Sys.time()
+# end_time-start_time
+```
+
+The random forest model took approximately 34 seconds to run. The model will be saved for efficiency.
+
+```{r}
+# # Save and remove model
+# saveRDS(rf_fit, "rf_fit.rds")
+# rm(rf_fit)
+
+# Read in model
+rf_fit = readRDS("rf_fit.rds")
+```
+
+```{r}
+# Display variable importance
+varImp(rf_fit)
+```
+
+The table above contains scores for variable importance in the model. The Primary Type variable appears to be the most important in the random forest model. The variables for hour of the day, month of the year, street type and day of week appear to be inconsequential in the model. Using the `predict` function, we will generate predictions on the train data set and use a confusion matrix to evaluate performance.
+
+```{r}
+# Create predictions on train set
+pred.train = predict(rf_fit, train)
+head(pred.train)
+
+# Create confusion matrix
+confusionMatrix(pred.train, train$Arrest, positive = "Yes")
+```
+
+The random forest model has an accuracy of 0.8484 which is greater than the naive model. The model correctly identified 39 percent of the true positive values. Note that the specificity of the model is very strong. The unbalanced values of sensitivity and specificity are likely caused by a heavily skewed data set. Recall that in Phase 1 we discovered that 80 percent of the crimes in the data set have had no arrests made.  This is also visible in the confusion matrix which displays a large number of true negative values. 
+
+```{r}
+# Make predictions on test set
+pred.test = predict(rf_fit, test)
+head(pred.test)
+
+# Create confusion matrix
+confusionMatrix(pred.test, test$Arrest, positive = "Yes")
+```
+
+The model performed nearly identical on both, the train and the test data. This phenomenon is likely evidence that the model is fit well to the data. While performance is fairly strong, we will try to improve the model's sensitivity using a neural network. 
+
+```{r}
+# # Create grid
+# nnetGrid =  expand.grid(size = 1:8,
+#                         decay = c(0.5, 0.1, 1e-2, 1e-3,
+#                                   1e-4,1e-5,1e-6,1e-7))
+# 
+# # Measure model run time
+# start_time = Sys.time()
+# 
+# 
+# set.seed(1234)
+# # Fit the model
+# nnetFit = train(x = as.data.frame(df2[ , -1]), y = df2$Arrest,
+#                 method = "nnet",
+#                 trControl = ctrl,
+#                 tuneGrid = nnetGrid,
+#                 trace = FALSE,
+#                 verbose = FALSE
+#                 )
+# 
+# # Measure model run time
+# end_time = Sys.time()
+# end_time-start_time
+```
+
+The neural network took about 48 minutes to run. We will save the model so it will not have to be run again and it can be loaded into the analysis.
+
+```{r}
+# # Save and remove model
+# saveRDS(nnetFit, "nnetFit.rds")
+# rm(nnetFit)
+
+# Read in model
+nnetFit = readRDS("nnetFit.rds")
+```
+
+```{r}
+# Create predictions on train set
+pred.train.nnet = predict(nnetFit, train)
+head(pred.train.nnet)
+
+# Create confusion matrix
+confusionMatrix(pred.train.nnet, train$Arrest, positive = "Yes")
+```
+
+The neural network model has an accuracy of 0.8765 on the train data set. The naive model has an accuracy of 0.7979. When we compare the accuracy of the neural network to the random forest created above with an accuracy of 0.8484, we see there is some model improvement using the neural network. The specificity measure is very strong, likely the result of the skewed data set favoring crimes with no arrests made. There is also an improvement in sensitivity. The neural network was able to correctly identify another 10 percent of positive values. Let us examine how well the neural network performs on the test data.
+
+```{r}
+# Create predictions on train set
+pred.test.nnet = predict(nnetFit, test)
+head(pred.test.nnet)
+
+# Create confusion matrix
+confusionMatrix(pred.test.nnet, test$Arrest, positive = "Yes")
+```
+
+The neural network performed very similarly between the train and test data sets. As with the random forest, this lends confidence to model performance and confirms that the model did not over fit the data. In a final attempt, we will build an ensemble model combining a logistic regression model, a classification tree, a random forest and a neural network. We are increasing model complexity with the hopes of improving our results.
+
+```{r}
+# start_time = Sys.time()
+# # Build ensemble
+# set.seed(111)
+# model_list = caretList(
+#   x = as.data.frame(train[ , -1]), y = train$Arrest,
+#   metric = "ROC",
+#   trControl = ctrl,
+#   methodList = c("glm","rpart"),
+#   tuneList = list(ranger = caretModelSpec(
+#     method = "ranger",
+#     max.depth = 5,
+#     tuneGrid = expand.grid(
+#       mtry = 1:8,
+#       splitrule = c("gini",
+#                     "extratrees",
+#                     "hellinger"),
+#       min.node.size = 1:3)),
+#               nn = caretModelSpec(
+#                 method = "nnet",
+#                 tuneGrid = expand.grid(
+#                   size = 1:8,
+#                   decay = c(1e-2, 1e-3, 1e-4,
+#                             1e-5,1e-6,1e-7)),
+#                 trace = FALSE))
+#   )
+# 
+# end_time = Sys.time()
+# end_time-start_time
+```
+
+```{r}
+# # Save and remove model
+# saveRDS(model_list, "model_list.rds")
+# rm(model_list)
+
+# Read in model
+model_list = readRDS("model_list.rds")
+```
+
+The ensemble model has been built and saved. It took nearly 51 minutes to run. A correlation matrix will reveal relationships between the four models in the ensemble.
+
+```{r}
+modelCor(resamples(model_list))
+```
+
+The strongest correlation exists between the random forest and the logistic regression model. Interestingly, the neural network has a moderately strong negative correlation with the random forest. The neural network is also negatively correlated with the logistic regression and classification tree models. Typically, we would like to see no correlation among the models.
+
+```{r}
+# Create model ensemble
+ensemble = caretEnsemble(model_list,
+                         metric="ROC",
+                         trControl=ctrl)
+summary(ensemble)
+```
+
+The table above shows that the random forest has the highest AUC of 0.85. There is some degradation looking at the three remaining models. We will generate predictions and analyze model performance.
+
+```{r}
+# Create predictions on train set
+pred.train.ensemble = predict(ensemble, train)
+head(pred.train.ensemble)
+
+# Create confusion matrix
+confusionMatrix(pred.train.ensemble, train$Arrest, positive = "Yes")
+```
+
+The single neural network from earlier performed slightly better than the model ensemble on the train data set. The neural network also has a sensitivity that is three points higher than the model ensemble. It appears that adding model complexity has caused some degradation in performance. This is at least true among the train data but let us examine how the ensemble model performs on the test data.
+
+```{r}
+# Create predictions on train set
+pred.test.ensemble = predict(ensemble, test)
+head(pred.test.ensemble)
+
+# Create confusion matrix
+confusionMatrix(pred.test.ensemble, test$Arrest, positive = "Yes")
+```
+
+As in the previous models, the test data set scores equally as well as on the train data set. We can then conclude that out of the three models that were built, the neural network performed best. Model accuracy is fairly strong but further work needs to be done to increase the model's sensitivity before it is deployed. The neural network model has a sensitivity of 0.49. This metric is particularly weak as the model only identified 49 percent of crimes where an actual arrest was made. With the model as is, we cannot confidently identify circumstances where and when reports of crimes requiring arrests will happen. This will lead to ineffective allocation of officers and resources. 
